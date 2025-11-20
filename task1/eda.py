@@ -1,43 +1,35 @@
-# %% [markdown]
-# # Task 1: Exploratory Data Analysis
-
-# %%
 import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-df = pd.read_csv('train_imputed.csv')
+def run_eda(df):
+    """
+    Performs exploratory data analysis on the dataframe.
+    """
+    print("Shape of the dataframe:", df.shape)
+    print("\nMissing values percentage:")
+    print(df.isnull().sum() / len(df) * 100)
 
-print(df.info())
-print(df.head())
-
-# %%
-# Distribution plots for numerical features
-numerical_cols = df.select_dtypes(include=['float64', 'int64']).columns
-for col in numerical_cols:
-    plt.figure(figsize=(8, 4))
-    sns.histplot(data=df, x=col, hue='is_cheater', bins=30, kde=True, element="step", stat="density")
-    plt.title(f"Distribution of '{col}'")
-    plt.xlabel(col)
-    plt.ylabel("Frequency")
+    plt.figure(figsize=(6, 4))
+    sns.countplot(x='is_cheater', data=df)
+    plt.title('Distribution of is_cheater')
     plt.show()
 
-# %%
-numerical_cols = df.select_dtypes(include=['float64', 'int64']).columns
-corr_mat = df[numerical_cols].corr()
-plt.figure(figsize=(12, 10))
-sns.heatmap(corr_mat, annot=True, fmt=".2f", cmap='coolwarm')
-plt.title("Correlation Matrix of Numerical Features")
-plt.show()
+    # Plotting distributions of some features
+    features_to_plot = [
+        'kill_death_ratio', 'headshot_percentage', 'accuracy_score',
+        'spray_control_score', 'reports_received', 'account_age_days'
+    ]
+    
+    for feature in features_to_plot:
+        plt.figure(figsize=(8, 5))
+        sns.histplot(df[feature], kde=True, bins=50)
+        plt.title(f'Distribution of {feature}')
+        plt.show()
 
-# %%
-# Top correlated features with 'is_cheater'
-target_corr = corr_mat['is_cheater'].abs().sort_values(ascending=False)
-print("Top correlated features with 'is_cheater':")
-target_corr[1:16]
-
-# %%
-target_corr[1:16].index.tolist()
-
-
+if __name__ == '__main__':
+    try:
+        df = pd.read_csv('task1/train.csv')
+        run_eda(df)
+    except FileNotFoundError:
+        print("Make sure 'task1/train.csv' is available.")
