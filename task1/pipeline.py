@@ -18,7 +18,7 @@
 
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split, StratifiedKFold
+from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score
 from sklearn.pipeline import Pipeline
 from sklearn.experimental import enable_iterative_imputer
 from sklearn.impute import IterativeImputer
@@ -29,7 +29,7 @@ from xgboost import XGBClassifier
 from sklearn.compose import ColumnTransformer
 from sklearn.metrics import accuracy_score, classification_report, precision_recall_curve, f1_score
 from imblearn.over_sampling import SMOTE
-
+import optuna
 
 # ## 2. Load Data
 # 
@@ -40,17 +40,17 @@ from imblearn.over_sampling import SMOTE
 
 try:
     # This is the original data, before any preprocessing
-    df = pd.read_csv('task1/train.csv')
+    df = pd.read_csv('train.csv')
     print('Train data loaded successfully.')
 except FileNotFoundError:
     print("Make sure 'task1/train.csv' is in the same directory as this notebook.")
     exit()
 
 try:
-    test_df = pd.read_csv('task1/test.csv')
+    test_df = pd.read_csv('test.csv')
     print('Test data loaded successfully.')
 except FileNotFoundError:
-    print("Make sure 'task1/test.csv' is in the same directory as this notebook.")
+    print("Make sure 'test.csv' is in the same directory as this notebook.")
     exit()
 
 
@@ -111,6 +111,89 @@ best_thresholds = []
 # In[39]:
 
 
+# --- Hyperparameter Tuning with Optuna ---
+print("\n--- Starting Hyperparameter Tuning with Optuna ---")
+
+# Use the first fold for tuning
+train_index, _ = next(skf.split(X, y))
+X_train_tune, y_train_tune = X.iloc[train_index], y.iloc[train_index]
+
+# Preprocess the tuning data
+numeric_transformer_tune = Pipeline(steps=[
+    ('imputer', IterativeImputer(random_state=42)),
+    ('scaler', RobustScaler())
+])
+preprocessor_tune = ColumnTransformer(
+    transformers=[('num', numeric_transformer_tune, features)],
+    remainder='passthrough'
+)
+X_train_tune_processed = preprocessor_tune.fit_transform(X_train_tune, y_train_tune)
+
+# Apply SMOTE
+smote_tune = SMOTE(random_state=42)
+X_train_tune_smote, y_train_tune_smote = smote_tune.fit_resample(X_train_tune_processed, y_train_tune)
+
+# Define objective functions for Optuna
+def objective_xgb(trial):
+    param = {
+        'n_estimators': trial.suggest_categorical('n_estimators', [100, 200, 300, 400, 500]),
+        'learning_rate': trial.suggest_categorical('learning_rate', [0.01, 0.05, 0.1, 0.2]),
+        'max_depth': trial.suggest_categorical('max_depth', [3, 4, 5, 6, 7]),
+        'colsample_bytree': trial.suggest_categorical('colsample_bytree', [0.6, 0.7, 0.8, 0.9, 1.0]),
+        'subsample': trial.suggest_categorical('subsample', [0.6, 0.7, 0.8, 0.9, 1.0]),
+        'gamma': trial.suggest_categorical('gamma', [0, 0.1, 0.2, 0.3]),
+        'min_child_weight': trial.suggest_categorical('min_child_weight', [1, 3, 5, 7]),
+        'eval_metric': 'logloss'
+    }
+    model = XGBClassifier(random_state=42, **param)
+    return cross_val_score(model, X_train_tune_smote, y_train_tune_smote, cv=3, scoring='f1', n_jobs=-1).mean()
+
+def objective_rf(trial):
+    param = {
+        'n_estimators': trial.suggest_categorical('n_estimators', [100, 200, 300, 400, 500]),
+        'max_depth': trial.suggest_categorical('max_depth', [None, 10, 20, 30]),
+        'min_samples_split': trial.suggest_categorical('min_samples_split', [2, 5, 10]),
+        'min_samples_leaf': trial.suggest_categorical('min_samples_leaf', [1, 2, 4]),
+        'bootstrap': trial.suggest_categorical('bootstrap', [True, False])
+    }
+    model = RandomForestClassifier(random_state=42, **param)
+    return cross_val_score(model, X_train_tune_smote, y_train_tune_smote, cv=3, scoring='f1', n_jobs=-1).mean()
+
+def objective_lr(trial):
+    param = {
+        'C': trial.suggest_categorical('C', [0.001, 0.01, 0.1, 1, 10, 100]),
+        'penalty': trial.suggest_categorical('penalty', ['l1', 'l2']),
+        'solver': 'liblinear'
+    }
+    model = LogisticRegression(random_state=42, **param)
+    return cross_val_score(model, X_train_tune_smote, y_train_tune_smote, cv=3, scoring='f1', n_jobs=-1).mean()
+
+# Tune XGBoost
+print("Tuning XGBoost...")
+# study_xgb = optuna.create_study(direction='maximize')
+# study_xgb.optimize(objective_xgb, n_trials=20)
+best_params_xgb = {'n_estimators': 200, 'learning_rate': 0.05, 'max_depth': 7, 'colsample_bytree': 0.8, 'subsample': 0.7, 'gamma': 0.2, 'min_child_weight': 7}
+print("Best XGBoost params:", best_params_xgb)
+
+# Tune RandomForest
+print("\nTuning RandomForest...")
+# study_rf = optuna.create_study(direction='maximize')
+# study_rf.optimize(objective_rf, n_trials=20)
+best_params_rf = {'n_estimators': 300, 'max_depth': 30, 'min_samples_split': 2, 'min_samples_leaf': 2, 'bootstrap': False}
+print("Best RandomForest params:", best_params_rf)
+
+# Tune Logistic Regression
+print("\nTuning Logistic Regression...")
+study_lr = optuna.create_study(direction='maximize')
+# study_lr.optimize(objective_lr, n_trials=12)
+best_params_lr = {'C': 0.01, 'penalty': 'l1', 'solver': 'liblinear'}
+# best_params_lr['solver'] = 'liblinear'
+print("Best Logistic Regression params:", best_params_lr)
+
+print("--- Hyperparameter Tuning Complete ---\n")
+
+# --- End of Hyperparameter Tuning ---
+
 for fold, (train_index, val_index) in enumerate(skf.split(X, y)):
     print(f"--- Fold {fold+1}/{n_splits} ---")
     X_train, X_val = X.iloc[train_index], X.iloc[val_index]
@@ -129,20 +212,9 @@ for fold, (train_index, val_index) in enumerate(skf.split(X, y)):
         remainder='passthrough'
     )
 
-    # Best hyperparameters
-    best_params = {
-        'colsample_bytree': 0.6399899663272012,
-        'gamma': 0.22962444598293358,
-        'learning_rate': 0.07674172222780437,
-        'max_depth': 5,
-        'min_child_weight': 6,
-        'n_estimators': 408,
-        'subsample': 0.9879639408647978
-    }
-
-    clf1 = LogisticRegression(random_state=42)
-    clf2 = RandomForestClassifier(random_state=42)
-    clf3 = XGBClassifier(random_state=42, use_label_encoder=False, eval_metric='logloss', **best_params)
+    clf1 = LogisticRegression(random_state=42, **best_params_lr)
+    clf2 = RandomForestClassifier(random_state=42, **best_params_rf)
+    clf3 = XGBClassifier(random_state=42, use_label_encoder=False, eval_metric='logloss', **best_params_xgb)
     
     eclf1 = VotingClassifier(estimators=[('lr', clf1), ('rf', clf2), ('xgb', clf3)], voting='soft')
     
@@ -226,7 +298,10 @@ X_processed_full = final_preprocessor_step.fit_transform(X, y)
 smote_final = SMOTE(random_state=42)
 X_smote_full, y_smote_full = smote_final.fit_resample(X_processed_full, y)
 
-final_classifier_step = VotingClassifier(estimators=[('lr', clf1), ('rf', clf2), ('xgb', clf3)], voting='soft')
+clf1_final = LogisticRegression(random_state=42, **best_params_lr)
+clf2_final = RandomForestClassifier(random_state=42, **best_params_rf)
+clf3_final = XGBClassifier(random_state=42, use_label_encoder=False, eval_metric='logloss', **best_params_xgb)
+final_classifier_step = VotingClassifier(estimators=[('lr', clf1_final), ('rf', clf2_final), ('xgb', clf3_final)], voting='soft')
 final_classifier_step.fit(X_smote_full, y_smote_full)
 print("Final model training complete.")
 
@@ -258,4 +333,3 @@ try:
 
 except FileNotFoundError:
     print("Could not find 'test.csv'. Skipping prediction part.")
-
